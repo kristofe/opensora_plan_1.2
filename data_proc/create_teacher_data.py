@@ -1,5 +1,5 @@
 '''
-Usage Example
+Usage Example:
 python data_proc/create_teacher_data.py \
     --manifest_path data/ucf101_index.json \
     --vae_path /path/to/vae/checkpoint \
@@ -37,6 +37,10 @@ import argparse
 import json
 import os
 
+# Fix for ARM64 CPU convolution issues - set before importing torch
+os.environ['MKLDNN_VERBOSE'] = '0'
+os.environ['MKL_THREADING_LAYER'] = 'GNU'
+
 import numpy as np
 import torch
 from decord import VideoReader, cpu
@@ -47,6 +51,9 @@ from transformers import T5EncoderModel, CLIPTextModelWithProjection, CLIPTokeni
 import huggingface_hub
 if not hasattr(huggingface_hub, 'cached_download'):
     huggingface_hub.cached_download = huggingface_hub.hf_hub_download
+
+# Disable problematic CPU optimizations that fail on ARM64
+torch.backends.mkldnn.enabled = False
 
 from opensora.dataset.transform import ToTensorVideo, CenterCropResizeVideo
 from opensora.models.causalvideovae import ae_wrapper
@@ -272,6 +279,8 @@ def main():
             
             # 2. Encode video to latents
             with torch.no_grad():
+                # Ensure contiguous memory layout for ARM64 CPU
+                video_tensor = video_tensor.contiguous()
                 z_teacher = vae.encode(video_tensor)  # Returns latents tensor
             
             # 3. Encode text
@@ -304,40 +313,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-'''
-NEXT STEPS:
-1.2 Teacher as a generator, driven by captions (text→video)
-
-This is slightly different and also valuable:
-
-For each text in your manifest:
-
-Ask teacher to generate a clip (text→video, standard T2V sampling).
-
-Save both:
-
-the generated RGB frames (teacher’s “clean output”),
-
-and the diffusion latents + text embeddings used during sampling.
-
-Why?
-Because now you have perfectly aligned (prompt, generated_video, z_teacher_generated).
-This gives you:
-
-clean, consistent synthetic data in the teacher’s own style,
-
-no copyright headache,
-
-and great input for Self-Forcing later (see below).
-
-So Phase 1 produces two parallel corpora:
-
-Real UCF-101 clips encoded into latents.
-
-Synthetic teacher generations from the same action captions.
-
-That’s gold. Keep both.
-
-'''
